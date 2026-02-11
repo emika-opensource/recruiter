@@ -768,6 +768,31 @@ tr:last-child td { border-bottom: none; }
 .clickable:hover { opacity: 0.85; }
 .hidden { display: none !important; }
 
+/* === Loading Overlay === */
+#loading-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(6,6,10,0.7);
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(2px);
+}
+#loading-overlay.hidden { display: none; }
+.loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* === Coming Soon Card === */
+.coming-soon-card { opacity: 0.6; }
+
 /* Chip list for onboarding roles */
 .role-chips { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .role-chip {

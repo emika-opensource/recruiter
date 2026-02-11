@@ -194,6 +194,75 @@ app.post('/api/candidates/import', (req, res) => {
   res.json({ imported: imported.length, candidates: imported });
 });
 
+// --- Shared scoring logic ---
+function autoScoreCandidate(candidate, project, weights) {
+  const breakdown = {};
+  let totalWeight = 0, totalScore = 0;
+
+  // Skills match
+  if (project && project.requiredSkills && project.requiredSkills.length) {
+    const w = weights.skillsMatch || 5;
+    totalWeight += w;
+    const text = (candidate.resumeText + ' ' + candidate.notes + ' ' + candidate.name).toLowerCase();
+    const matched = project.requiredSkills.filter(s => text.includes(s.toLowerCase()));
+    const ratio = matched.length / project.requiredSkills.length;
+    const pts = Math.round(ratio * 100);
+    breakdown.skillsMatch = { score: pts, weight: w, matched, total: project.requiredSkills.length };
+    totalScore += pts * w;
+  }
+
+  // Experience
+  if (project && project.experienceLevel) {
+    const w = weights.experience || 5;
+    totalWeight += w;
+    const text = (candidate.resumeText + ' ' + candidate.notes).toLowerCase();
+    const expKeywords = { 'junior': ['junior', '0-2 years', 'entry', 'graduate'], 'mid': ['mid', '3-5 years', 'intermediate'], 'senior': ['senior', '5+ years', '7+ years', 'lead', 'staff'], 'lead': ['lead', 'principal', 'staff', '10+ years', 'director', 'head'] };
+    const keywords = expKeywords[project.experienceLevel.toLowerCase()] || [];
+    const hasMatch = keywords.some(k => text.includes(k));
+    const pts = hasMatch ? 85 : 40;
+    breakdown.experience = { score: pts, weight: w, level: project.experienceLevel, matched: hasMatch };
+    totalScore += pts * w;
+  }
+
+  // Education
+  if (project && project.educationPreference) {
+    const w = weights.education || 5;
+    totalWeight += w;
+    const text = (candidate.resumeText + ' ' + candidate.notes).toLowerCase();
+    const hasEdu = text.includes(project.educationPreference.toLowerCase()) || text.includes('degree') || text.includes('university') || text.includes('bachelor') || text.includes('master');
+    const pts = hasEdu ? 80 : 35;
+    breakdown.education = { score: pts, weight: w, preference: project.educationPreference, matched: hasEdu };
+    totalScore += pts * w;
+  }
+
+  // Culture fit
+  if (project && project.cultureFitCriteria && project.cultureFitCriteria.length) {
+    const w = weights.cultureFit || 5;
+    totalWeight += w;
+    const text = (candidate.resumeText + ' ' + candidate.notes).toLowerCase();
+    const matched = project.cultureFitCriteria.filter(cr => text.includes(cr.toLowerCase()));
+    const ratio = project.cultureFitCriteria.length > 0 ? matched.length / project.cultureFitCriteria.length : 0;
+    const pts = Math.round(ratio * 100);
+    breakdown.cultureFit = { score: pts, weight: w, matched, total: project.cultureFitCriteria.length };
+    totalScore += pts * w;
+  }
+
+  // Communication (keyword based)
+  {
+    const w = weights.communication || 5;
+    totalWeight += w;
+    const text = (candidate.resumeText + ' ' + candidate.notes).toLowerCase();
+    const commWords = ['communication', 'presentation', 'writing', 'public speaking', 'leadership', 'teamwork', 'collaboration', 'mentoring'];
+    const matched = commWords.filter(kw => text.includes(kw));
+    const pts = Math.min(100, matched.length * 20 + 20);
+    breakdown.communication = { score: pts, weight: w, matched };
+    totalScore += pts * w;
+  }
+
+  const finalScore = totalWeight > 0 ? Math.round(totalScore / totalWeight) : 0;
+  return { score: finalScore, breakdown };
+}
+
 // Score a candidate
 app.post('/api/candidates/:id/score', (req, res) => {
   const candidates = loadJson('candidates.json', []);
@@ -216,78 +285,14 @@ app.post('/api/candidates/:id/score', (req, res) => {
   }
 
   // Auto-score
-  const breakdown = {};
-  const weights = scoring.weights || {};
-  let totalWeight = 0, totalScore = 0;
-
-  // Skills match
-  if (project && project.requiredSkills && project.requiredSkills.length) {
-    const w = weights.skillsMatch || 5;
-    totalWeight += w;
-    const text = (c.resumeText + ' ' + c.notes + ' ' + c.name).toLowerCase();
-    const matched = project.requiredSkills.filter(s => text.includes(s.toLowerCase()));
-    const ratio = matched.length / project.requiredSkills.length;
-    const pts = Math.round(ratio * 100);
-    breakdown.skillsMatch = { score: pts, weight: w, matched, total: project.requiredSkills.length };
-    totalScore += pts * w;
-  }
-
-  // Experience
-  if (project && project.experienceLevel) {
-    const w = weights.experience || 5;
-    totalWeight += w;
-    const text = (c.resumeText + ' ' + c.notes).toLowerCase();
-    const expKeywords = { 'junior': ['junior', '0-2 years', 'entry', 'graduate'], 'mid': ['mid', '3-5 years', 'intermediate'], 'senior': ['senior', '5+ years', '7+ years', 'lead', 'staff'], 'lead': ['lead', 'principal', 'staff', '10+ years', 'director', 'head'] };
-    const keywords = expKeywords[project.experienceLevel.toLowerCase()] || [];
-    const hasMatch = keywords.some(k => text.includes(k));
-    const pts = hasMatch ? 85 : 40;
-    breakdown.experience = { score: pts, weight: w, level: project.experienceLevel, matched: hasMatch };
-    totalScore += pts * w;
-  }
-
-  // Education
-  if (project && project.educationPreference) {
-    const w = weights.education || 5;
-    totalWeight += w;
-    const text = (c.resumeText + ' ' + c.notes).toLowerCase();
-    const hasEdu = text.includes(project.educationPreference.toLowerCase()) || text.includes('degree') || text.includes('university') || text.includes('bachelor') || text.includes('master');
-    const pts = hasEdu ? 80 : 35;
-    breakdown.education = { score: pts, weight: w, preference: project.educationPreference, matched: hasEdu };
-    totalScore += pts * w;
-  }
-
-  // Culture fit
-  if (project && project.cultureFitCriteria && project.cultureFitCriteria.length) {
-    const w = weights.cultureFit || 5;
-    totalWeight += w;
-    const text = (c.resumeText + ' ' + c.notes).toLowerCase();
-    const matched = project.cultureFitCriteria.filter(cr => text.includes(cr.toLowerCase()));
-    const ratio = project.cultureFitCriteria.length > 0 ? matched.length / project.cultureFitCriteria.length : 0;
-    const pts = Math.round(ratio * 100);
-    breakdown.cultureFit = { score: pts, weight: w, matched, total: project.cultureFitCriteria.length };
-    totalScore += pts * w;
-  }
-
-  // Communication (keyword based)
-  {
-    const w = weights.communication || 5;
-    totalWeight += w;
-    const text = (c.resumeText + ' ' + c.notes).toLowerCase();
-    const commWords = ['communication', 'presentation', 'writing', 'public speaking', 'leadership', 'teamwork', 'collaboration', 'mentoring'];
-    const matched = commWords.filter(w => text.includes(w));
-    const pts = Math.min(100, matched.length * 20 + 20);
-    breakdown.communication = { score: pts, weight: w, matched };
-    totalScore += pts * w;
-  }
-
-  const finalScore = totalWeight > 0 ? Math.round(totalScore / totalWeight) : 0;
-  c.score = finalScore;
-  c.scoreBreakdown = breakdown;
+  const result = autoScoreCandidate(c, project, scoring.weights || {});
+  c.score = result.score;
+  c.scoreBreakdown = result.breakdown;
   c.scoreReason = 'Auto-scored based on criteria';
   c.updatedAt = new Date().toISOString();
   candidates[idx] = c;
   saveJson('candidates.json', candidates);
-  addActivity('candidate_scored', { candidateId: c.id, name: c.name, score: finalScore, method: 'auto' });
+  addActivity('candidate_scored', { candidateId: c.id, name: c.name, score: result.score, method: 'auto' });
   res.json(c);
 });
 
@@ -302,64 +307,9 @@ app.post('/api/candidates/batch-score', (req, res) => {
     const c = candidates[i];
     if (c.score !== null && c.score !== undefined) continue;
     const project = projects.find(p => p.id === c.projectId);
-    const weights = scoring.weights || {};
-    const breakdown = {};
-    let totalWeight = 0, totalScore = 0;
-
-    if (project && project.requiredSkills && project.requiredSkills.length) {
-      const w = weights.skillsMatch || 5;
-      totalWeight += w;
-      const text = (c.resumeText + ' ' + c.notes + ' ' + c.name).toLowerCase();
-      const matched = project.requiredSkills.filter(s => text.includes(s.toLowerCase()));
-      const ratio = matched.length / project.requiredSkills.length;
-      const pts = Math.round(ratio * 100);
-      breakdown.skillsMatch = { score: pts, weight: w, matched, total: project.requiredSkills.length };
-      totalScore += pts * w;
-    }
-    if (project && project.experienceLevel) {
-      const w = weights.experience || 5;
-      totalWeight += w;
-      const text = (c.resumeText + ' ' + c.notes).toLowerCase();
-      const expKeywords = { 'junior': ['junior', '0-2 years', 'entry'], 'mid': ['mid', '3-5 years'], 'senior': ['senior', '5+ years', 'lead'], 'lead': ['lead', 'principal', '10+ years'] };
-      const keywords = expKeywords[project.experienceLevel.toLowerCase()] || [];
-      const hasMatch = keywords.some(k => text.includes(k));
-      const pts = hasMatch ? 85 : 40;
-      breakdown.experience = { score: pts, weight: w, matched: hasMatch };
-      totalScore += pts * w;
-    }
-    if (project && project.educationPreference) {
-      const w = weights.education || 5;
-      totalWeight += w;
-      const text = (c.resumeText + ' ' + c.notes).toLowerCase();
-      const hasEdu = text.includes(project.educationPreference.toLowerCase()) || text.includes('degree') || text.includes('university');
-      const pts = hasEdu ? 80 : 35;
-      breakdown.education = { score: pts, weight: w, matched: hasEdu };
-      totalScore += pts * w;
-    }
-    if (project && project.cultureFitCriteria && project.cultureFitCriteria.length) {
-      const w = weights.cultureFit || 5;
-      totalWeight += w;
-      const text = (c.resumeText + ' ' + c.notes).toLowerCase();
-      const matched = project.cultureFitCriteria.filter(cr => text.includes(cr.toLowerCase()));
-      const ratio = matched.length / project.cultureFitCriteria.length;
-      const pts = Math.round(ratio * 100);
-      breakdown.cultureFit = { score: pts, weight: w, matched, total: project.cultureFitCriteria.length };
-      totalScore += pts * w;
-    }
-    {
-      const w = weights.communication || 5;
-      totalWeight += w;
-      const text = (c.resumeText + ' ' + c.notes).toLowerCase();
-      const commWords = ['communication', 'presentation', 'writing', 'leadership', 'teamwork', 'collaboration'];
-      const matched = commWords.filter(kw => text.includes(kw));
-      const pts = Math.min(100, matched.length * 20 + 20);
-      breakdown.communication = { score: pts, weight: w, matched };
-      totalScore += pts * w;
-    }
-
-    const finalScore = totalWeight > 0 ? Math.round(totalScore / totalWeight) : 0;
-    candidates[i].score = finalScore;
-    candidates[i].scoreBreakdown = breakdown;
+    const result = autoScoreCandidate(c, project, scoring.weights || {});
+    candidates[i].score = result.score;
+    candidates[i].scoreBreakdown = result.breakdown;
     candidates[i].scoreReason = 'Auto-scored (batch)';
     candidates[i].updatedAt = new Date().toISOString();
     scored++;

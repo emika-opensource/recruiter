@@ -200,3 +200,54 @@ The Recruiter image is a **competent v1** with solid bones: the data model is se
 **The #3 problem is fragility.** No loading states, no error handling in the API helper, no auth. The app feels like a prototype that works in demos but breaks in production.
 
 Fix items 1-5 and this becomes a solid tool. Fix 1-10 and it's genuinely useful.
+
+---
+
+## Fixes Applied
+
+**Date:** 2026-02-11
+
+### Critical (Items 1-5) ✅
+
+1. **"Skip to Dashboard" button added** — Welcome step (step 0) now has a "Skip to Dashboard →" button that marks onboarding complete and goes straight to the dashboard. Users can explore freely and set up roles later from the Roles page.
+
+2. **Loading state added to `loadAll()`** — Full-screen loading overlay with spinner shown during all data fetches. `showLoading()`/`hideLoading()` functions with CSS spinner animation.
+
+3. **Error handling added to `api()` helper** — The `api()` function now: checks `res.ok` and toasts error messages on failure; catches network errors and shows "Network error" toast; wraps everything in try/catch so the app never crashes silently.
+
+4. **Naming consistency fixed: "Projects" → "Roles"** — Sidebar renamed from "Projects" to "Roles". Hash route changed from `#projects` to `#roles` (with backward compat). Page header says "Roles" not "Projects (Roles)". `renderRoles()` function created (old `renderProjects` kept as alias). All UI labels updated.
+
+5. **Candidate edit functionality added to detail modal** — "Edit" button in candidate detail opens `showEditCandidateModal()` with pre-filled form for name, email, phone, LinkedIn, role, source, resume, notes. Saves via `PUT /api/candidates/:id`.
+
+### High Impact (Items 6-10) ✅
+
+6. **Candidate import UI added** — "Import" button on Candidates page opens modal with CSV/JSON format selector, role assignment dropdown, and paste textarea. Parses CSV with headers or JSON arrays and calls `POST /api/candidates/import`.
+
+7. **Scoring logic extracted into shared function** — `autoScoreCandidate(candidate, project, weights)` function in server.js replaces ~80 lines of duplicated code in both `/score` and `/batch-score` endpoints.
+
+8. *(Auth not added — requires architectural decision beyond UI fixes)*
+
+9. **Pipeline empty state improved** — When no roles exist or none is selected, shows a helpful empty state with icon and "Create a Role" button linking to `#roles`. Filter button removed (was a non-functional toast).
+
+10. **BrowserBase integrations marked "Coming Soon"** — All 4 BrowserBase cards (LinkedIn, Indeed, Glassdoor, AngelList) now show a yellow "Coming Soon" badge, dimmed styling, and text explaining they're planned for a future release. No fake action buttons. Updated in both onboarding wizard and integrations page. SKILL.md also updated.
+
+### Medium Impact ✅
+
+11. **`esc()` XSS fix in inline handlers** — Added `escJs()` function that escapes backslashes, single quotes, and double quotes for safe use in inline `onclick` JS string literals. Applied to stage names in kanban drop handlers and candidate stage move buttons.
+
+12. **Filter button removed from Pipeline** — Was a non-functional toast. Removed entirely since the role selector dropdown is the actual filter.
+
+13. **Scoring criteria explanations added** — Each weight slider on the Scoring page now has a description explaining what it measures (e.g., "Compares candidate resume keywords against required skills...").
+
+14. **Timezone changed to dropdown** — Settings page now uses a `<select>` with common timezone options instead of free text input.
+
+15. **Keyboard shortcut: Escape closes modals** — Added `keydown` listener for Escape key.
+
+### Documentation ✅
+
+16. **BOOTSTRAP.md compressed** — Reduced from verbose 7-section document to concise reference with setup flow, API calls, and note about skip-onboarding path.
+
+17. **SKILL.md updated** — Added tone/persona guidance, proactive behavior suggestions, and marked BrowserBase integrations as "Coming Soon".
+
+### Integration sync note
+The sync endpoint (`POST /api/integrations/:platform/sync`) remains a stub on the server side — this requires actual ATS API integration which is beyond a UI fix. The UI no longer misleads: BrowserBase platforms have no sync button, and API platforms show sync status honestly.

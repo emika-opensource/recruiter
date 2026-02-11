@@ -13,26 +13,40 @@ const state = {
   settings: {},
   activity: [],
   dashboard: {},
+  loading: false,
   onboardingComplete: false,
   onboarding: { step: 0, roles: [], profiles: {}, stages: ['Sourced','Screening','Phone Screen','Technical','Culture Fit','Offer','Hired'] }
 };
 
 // --- API Helpers ---
 async function api(url, opts = {}) {
-  const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...opts.headers },
-    ...opts,
-    body: opts.body ? JSON.stringify(opts.body) : undefined
-  });
-  if (url.includes('/export') && res.ok) {
-    const blob = await res.blob();
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'candidates.csv';
-    a.click();
-    return;
+  try {
+    const res = await fetch(url, {
+      headers: { 'Content-Type': 'application/json', ...opts.headers },
+      ...opts,
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    });
+    if (url.includes('/export') && res.ok) {
+      const blob = await res.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'candidates.csv';
+      a.click();
+      return;
+    }
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      const msg = errData.error || `Request failed (${res.status})`;
+      toast(msg, 'error');
+      throw new Error(msg);
+    }
+    return await res.json();
+  } catch (e) {
+    if (e.message && !e.message.includes('Request failed')) {
+      toast('Network error — please check your connection', 'error');
+    }
+    throw e;
   }
-  return res.json();
 }
 
 function toast(msg, type = 'success') {
@@ -79,25 +93,55 @@ function esc(s) {
   return d.innerHTML;
 }
 
+/** Escape for use inside JS string literals in inline handlers */
+function escJs(s) {
+  return String(s || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
+}
+
+// --- Loading Overlay ---
+function showLoading() {
+  state.loading = true;
+  let el = document.getElementById('loading-overlay');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'loading-overlay';
+    el.innerHTML = '<div class="loading-spinner"></div>';
+    document.body.appendChild(el);
+  }
+  el.classList.remove('hidden');
+}
+function hideLoading() {
+  state.loading = false;
+  const el = document.getElementById('loading-overlay');
+  if (el) el.classList.add('hidden');
+}
+
 // --- Data Loading ---
 async function loadAll() {
-  const [settings, projects, candidates, integrations, scoring, dashboard, activity] = await Promise.all([
-    api('/api/settings'),
-    api('/api/projects'),
-    api('/api/candidates'),
-    api('/api/integrations'),
-    api('/api/scoring'),
-    api('/api/dashboard'),
-    api('/api/activity?limit=50')
-  ]);
-  state.settings = settings;
-  state.projects = projects;
-  state.candidates = candidates;
-  state.integrations = integrations;
-  state.scoring = scoring;
-  state.dashboard = dashboard;
-  state.activity = activity;
-  state.onboardingComplete = !!settings.onboardingComplete;
+  showLoading();
+  try {
+    const [settings, projects, candidates, integrations, scoring, dashboard, activity] = await Promise.all([
+      api('/api/settings'),
+      api('/api/projects'),
+      api('/api/candidates'),
+      api('/api/integrations'),
+      api('/api/scoring'),
+      api('/api/dashboard'),
+      api('/api/activity?limit=50')
+    ]);
+    state.settings = settings;
+    state.projects = projects;
+    state.candidates = candidates;
+    state.integrations = integrations;
+    state.scoring = scoring;
+    state.dashboard = dashboard;
+    state.activity = activity;
+    state.onboardingComplete = !!settings.onboardingComplete;
+  } catch (e) {
+    console.error('Failed to load data:', e);
+  } finally {
+    hideLoading();
+  }
 }
 
 // --- Router ---
@@ -120,6 +164,11 @@ document.addEventListener('click', e => {
     e.preventDefault();
     location.hash = nav.dataset.page;
   }
+});
+
+// --- Keyboard shortcuts ---
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeModal();
 });
 
 // --- Modal ---
@@ -208,7 +257,7 @@ function renderOnboarding() {
         </div>
       </div>
       <div class="onboarding-actions">
-        <div></div>
+        <button class="btn" onclick="skipOnboarding()">Skip to Dashboard →</button>
         <button class="btn btn-primary" onclick="nextOnboarding()">Get Started</button>
       </div>`;
   } else if (s.step === 1) {
@@ -368,10 +417,11 @@ function renderOnboarding() {
                 <div style="font-weight:600;font-size:13px;">${p.name}</div>
                 <div style="font-size:11px;color:var(--text-muted);">${p.type} Integration</div>
               </div>
+              ${p.type === 'BrowserBase' ? '<span class="badge badge-yellow">Coming Soon</span>' : ''}
             </div>
             ${p.fields.includes('apiKey') ? `<div class="form-group"><label class="form-label">API Key</label><input class="input" data-integ-key="${p.id}" placeholder="Enter API key"></div>` : ''}
             ${p.fields.includes('subdomain') ? `<div class="form-group"><label class="form-label">Subdomain</label><input class="input" data-integ-sub="${p.id}" placeholder="your-company"></div>` : ''}
-            ${p.type === 'BrowserBase' ? `<div style="font-size:11px;color:var(--text-muted);">Requires BROWSERBASE_API_KEY env var</div>` : ''}
+            ${p.type === 'BrowserBase' ? `<div style="font-size:11px;color:var(--text-muted);">BrowserBase scraping is not yet available. This integration will be enabled in a future update.</div>` : ''}
           </div>`).join('')}
       </div>
       <div class="onboarding-actions">
@@ -469,6 +519,7 @@ window.addOnbRole = function() {
     requiredSkills: reqSkillsWrap ? getTagsFromWrap(reqSkillsWrap) : [],
     niceToHaveSkills: niceSkillsWrap ? getTagsFromWrap(niceSkillsWrap) : []
   });
+  toast('Role added to setup');
   renderOnboarding();
 };
 
@@ -539,6 +590,15 @@ window.prevOnboarding = function() {
   }
 };
 
+window.skipOnboarding = async function() {
+  await api('/api/onboarding/complete', { method: 'POST' });
+  state.onboardingComplete = true;
+  document.getElementById('app').classList.remove('onboarding-active');
+  await loadAll();
+  navigate('dashboard');
+  toast('Welcome! Explore the dashboard — you can set up roles anytime from the Roles page.');
+};
+
 window.finishOnboarding = async function() {
   // Create projects from roles
   for (let i = 0; i < state.onboarding.roles.length; i++) {
@@ -580,7 +640,7 @@ window.finishOnboarding = async function() {
 
 function render() {
   if (!state.onboardingComplete) return renderOnboarding();
-  const pages = { dashboard: renderDashboard, pipeline: renderPipeline, candidates: renderCandidates, projects: renderProjects, integrations: renderIntegrations, scoring: renderScoring, reports: renderReports, settings: renderSettings };
+  const pages = { dashboard: renderDashboard, pipeline: renderPipeline, candidates: renderCandidates, roles: renderRoles, integrations: renderIntegrations, scoring: renderScoring, reports: renderReports, settings: renderSettings };
   const fn = pages[state.page] || renderDashboard;
   fn();
 }
@@ -669,27 +729,33 @@ function renderPipeline() {
   const stages = project ? [...(project.pipelineStages || []), 'Rejected'] : ['Sourced', 'Screening', 'Phone Screen', 'Technical', 'Culture Fit', 'Offer', 'Hired', 'Rejected'];
   const candidates = state.candidates.filter(c => c.projectId === selectedProject);
 
+  const emptyState = !selectedProject || state.projects.length === 0
+    ? `<div class="empty-state" style="padding:60px 20px;">
+        <svg width="48" height="48" viewBox="0 0 48 48" fill="none"><rect x="4" y="8" width="12" height="32" rx="3" stroke="var(--text-muted)" stroke-width="2"/><rect x="18" y="14" width="12" height="26" rx="3" stroke="var(--text-muted)" stroke-width="2"/><rect x="32" y="20" width="12" height="20" rx="3" stroke="var(--text-muted)" stroke-width="2"/></svg>
+        <p style="margin-top:12px;">Create your first role to see the pipeline.</p>
+        <button class="btn btn-primary" style="margin-top:12px;" onclick="location.hash='roles'">Create a Role</button>
+      </div>`
+    : '';
+
   pc.innerHTML = `
     <div class="page-header">
       <h1>Pipeline</h1>
       <div class="page-header-actions">
-        <button class="btn btn-primary" onclick="showAddCandidateModal('${selectedProject}')">
+        ${selectedProject ? `<button class="btn btn-primary" onclick="showAddCandidateModal('${selectedProject}')">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           Add Candidate
-        </button>
+        </button>` : ''}
       </div>
     </div>
+    ${state.projects.length > 0 ? `
     <div class="pipeline-selector">
       <label class="form-label" style="margin:0;">Role:</label>
       <select class="select-styled" style="width:260px;" onchange="state._pipelineProject=this.value; renderPipeline()">
         ${!selectedProject ? '<option value="">Select a role</option>' : ''}
         ${projectOptions}
       </select>
-      <button class="btn btn-sm" onclick="filterPipelineModal()">
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 2h12M3 7h8M5 12h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-        Filter
-      </button>
-    </div>
+    </div>` : ''}
+    ${emptyState || `
     <div class="kanban-container">
       ${stages.map(stage => {
         const items = candidates.filter(c => c.stage === stage);
@@ -702,7 +768,7 @@ function renderPipeline() {
             <div class="kanban-column-body" data-drop-stage="${esc(stage)}"
                  ondragover="event.preventDefault(); this.classList.add('drag-over')"
                  ondragleave="this.classList.remove('drag-over')"
-                 ondrop="handleKanbanDrop(event, '${esc(stage)}')">
+                 ondrop="handleKanbanDrop(event, '${escJs(stage)}')">
               ${items.map(c => `
                 <div class="kanban-card" draggable="true" data-candidate-id="${c.id}"
                      ondragstart="event.dataTransfer.setData('text/plain','${c.id}'); this.classList.add('dragging')"
@@ -720,7 +786,7 @@ function renderPipeline() {
             </div>
           </div>`;
       }).join('')}
-    </div>`;
+    </div>`}`;
 }
 
 window.handleKanbanDrop = async function(event, stage) {
@@ -744,6 +810,10 @@ function renderCandidates() {
     <div class="page-header">
       <h1>Candidates</h1>
       <div class="page-header-actions">
+        <button class="btn" onclick="showImportCandidatesModal()">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 9V1M3 5l4-4 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 12h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          Import
+        </button>
         <button class="btn" onclick="showBulkScoreModal()">Score Unscored</button>
         <button class="btn" onclick="exportCandidates()">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v9M3 7l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M1 12h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
@@ -858,6 +928,7 @@ window.showCandidateDetail = function(id) {
       <div style="display:flex;gap:8px;align-items:center;">
         ${scoreBadge(c.score)}
         <button class="btn btn-sm" onclick="scoreCandidate('${c.id}')">Score</button>
+        <button class="btn btn-sm" onclick="showEditCandidateModal('${c.id}')">Edit</button>
       </div>
     </div>
     <div style="margin-top:16px;">
@@ -874,7 +945,7 @@ window.showCandidateDetail = function(id) {
       <div class="detail-section">
         <h3>Move Stage</h3>
         <div style="display:flex;gap:6px;flex-wrap:wrap;">
-          ${stages.map(s => `<button class="btn btn-sm ${s === c.stage ? 'btn-primary' : ''}" onclick="moveCandidateStage('${c.id}','${esc(s)}')">${esc(s)}</button>`).join('')}
+          ${stages.map(s => `<button class="btn btn-sm ${s === c.stage ? 'btn-primary' : ''}" onclick="moveCandidateStage('${c.id}','${escJs(s)}')">${esc(s)}</button>`).join('')}
         </div>
       </div>
       ${c.resumeText ? `<div class="detail-section"><h3>Resume / CV</h3><div style="font-size:12.5px;white-space:pre-wrap;max-height:200px;overflow-y:auto;background:var(--bg-input);padding:10px;border-radius:var(--radius-sm);">${esc(c.resumeText)}</div></div>` : ''}
@@ -921,6 +992,147 @@ window.deleteCandidate = async function(id) {
   toast('Candidate deleted');
 };
 
+// --- Edit Candidate Modal ---
+window.showEditCandidateModal = function(id) {
+  const c = state.candidates.find(x => x.id === id);
+  if (!c) return;
+  const projectOptions = state.projects.map(p => `<option value="${p.id}" ${p.id === c.projectId ? 'selected' : ''}>${esc(p.title)}</option>`).join('');
+  showModal(`
+    <h2>Edit Candidate</h2>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Full Name</label><input class="input" id="ec-name" value="${esc(c.name || '')}"></div>
+      <div class="form-group"><label class="form-label">Email</label><input class="input" id="ec-email" type="email" value="${esc(c.email || '')}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Phone</label><input class="input" id="ec-phone" value="${esc(c.phone || '')}"></div>
+      <div class="form-group"><label class="form-label">LinkedIn URL</label><input class="input" id="ec-linkedin" value="${esc(c.linkedin || '')}"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label class="form-label">Role</label>
+        <select class="select-styled" id="ec-project">${projectOptions}</select>
+      </div>
+      <div class="form-group"><label class="form-label">Source</label>
+        <select class="select-styled" id="ec-source">
+          ${['manual','referral','linkedin','indeed','greenhouse','import','other'].map(s => `<option value="${s}" ${c.source === s ? 'selected' : ''}>${s}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="form-group"><label class="form-label">Resume / CV Text</label><textarea class="textarea" id="ec-resume" rows="4">${esc(c.resumeText || '')}</textarea></div>
+    <div class="form-group"><label class="form-label">Notes</label><textarea class="textarea" id="ec-notes" rows="2">${esc(c.notes || '')}</textarea></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal(); showCandidateDetail('${c.id}');">Cancel</button>
+      <button class="btn btn-primary" onclick="submitEditCandidate('${c.id}')">Save Changes</button>
+    </div>
+  `);
+};
+
+window.submitEditCandidate = async function(id) {
+  const name = document.getElementById('ec-name').value.trim();
+  if (!name) return toast('Name is required', 'error');
+  const projectId = document.getElementById('ec-project').value;
+  const project = state.projects.find(p => p.id === projectId);
+  await api(`/api/candidates/${id}`, { method: 'PUT', body: {
+    name,
+    email: document.getElementById('ec-email').value.trim(),
+    phone: document.getElementById('ec-phone').value.trim(),
+    linkedin: document.getElementById('ec-linkedin').value.trim(),
+    projectId,
+    role: project ? project.title : '',
+    source: document.getElementById('ec-source').value,
+    resumeText: document.getElementById('ec-resume').value.trim(),
+    notes: document.getElementById('ec-notes').value.trim()
+  }});
+  await loadAll();
+  closeModal();
+  showCandidateDetail(id);
+  toast('Candidate updated');
+};
+
+// --- Import Candidates Modal ---
+window.showImportCandidatesModal = function() {
+  const projectOptions = state.projects.map(p => `<option value="${p.id}">${esc(p.title)}</option>`).join('');
+  showModal(`
+    <h2>Import Candidates</h2>
+    <p style="font-size:13px;color:var(--text-dim);margin-bottom:16px;">Paste candidate data as CSV or JSON. CSV should have headers: name, email, phone, linkedin, notes.</p>
+    <div class="form-group">
+      <label class="form-label">Assign to Role</label>
+      <select class="select-styled" id="imp-project">
+        <option value="">— No role —</option>
+        ${projectOptions}
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Format</label>
+      <select class="select-styled" id="imp-format">
+        <option value="csv">CSV (with headers)</option>
+        <option value="json">JSON (array of objects)</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Paste Data</label>
+      <textarea class="textarea" id="imp-data" rows="10" placeholder="name,email,phone,linkedin,notes\nJane Doe,jane@example.com,555-1234,,Great candidate"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitImportCandidates()">Import</button>
+    </div>
+  `, 'modal-lg');
+};
+
+window.submitImportCandidates = async function() {
+  const format = document.getElementById('imp-format').value;
+  const raw = document.getElementById('imp-data').value.trim();
+  const projectId = document.getElementById('imp-project').value;
+  const project = state.projects.find(p => p.id === projectId);
+
+  if (!raw) return toast('Please paste candidate data', 'error');
+
+  let items = [];
+  try {
+    if (format === 'json') {
+      items = JSON.parse(raw);
+      if (!Array.isArray(items)) items = [items];
+    } else {
+      // Parse CSV
+      const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+      if (lines.length < 2) return toast('CSV needs a header row and at least one data row', 'error');
+      const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+      for (let i = 1; i < lines.length; i++) {
+        const vals = lines[i].match(/(".*?"|[^,]+|(?<=,)(?=,))/g) || [];
+        const obj = {};
+        headers.forEach((h, j) => {
+          let v = (vals[j] || '').trim();
+          if (v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1);
+          obj[h] = v;
+        });
+        items.push(obj);
+      }
+    }
+  } catch (e) {
+    return toast('Failed to parse data: ' + e.message, 'error');
+  }
+
+  if (items.length === 0) return toast('No candidates found in data', 'error');
+
+  // Attach project info
+  items = items.map(item => ({
+    ...item,
+    projectId: projectId || item.projectId || '',
+    role: item.role || (project ? project.title : ''),
+    source: item.source || 'import'
+  }));
+
+  try {
+    const result = await api('/api/candidates/import', { method: 'POST', body: { items } });
+    await loadAll();
+    closeModal();
+    render();
+    toast(`Imported ${result.imported} candidates`);
+  } catch (e) {
+    // Error already toasted by api()
+  }
+};
+
 // --- Add Candidate Modal ---
 window.showAddCandidateModal = function(projectId = '') {
   const projectOptions = state.projects.map(p => `<option value="${p.id}" ${p.id === projectId ? 'selected' : ''}>${esc(p.title)}</option>`).join('');
@@ -935,7 +1147,7 @@ window.showAddCandidateModal = function(projectId = '') {
       <div class="form-group"><label class="form-label">LinkedIn URL</label><input class="input" id="ac-linkedin"></div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label class="form-label">Role / Project</label>
+      <div class="form-group"><label class="form-label">Role</label>
         <select class="select-styled" id="ac-project">${projectOptions}</select>
       </div>
       <div class="form-group"><label class="form-label">Source</label>
@@ -986,12 +1198,12 @@ window.showBulkScoreModal = async function() {
   toast(`Scored ${result.scored} candidates`);
 };
 
-// --- PROJECTS ---
-function renderProjects() {
+// --- ROLES (formerly Projects) ---
+function renderRoles() {
   const pc = document.getElementById('page-content');
   pc.innerHTML = `
     <div class="page-header">
-      <h1>Projects (Roles)</h1>
+      <h1>Roles</h1>
       <div class="page-header-actions">
         <button class="btn btn-primary" onclick="showProjectModal()">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -1029,6 +1241,9 @@ function renderProjects() {
       </div>
     </div>`;
 }
+
+// Keep old name working for hash routing
+function renderProjects() { renderRoles(); }
 
 window.showProjectModal = function(project = null) {
   const p = project || {};
@@ -1191,16 +1406,18 @@ function renderIntegrations() {
 
 function integrationCard(platform, existing) {
   const connected = existing && existing.apiKey;
+  const isBrowser = platform.type === 'BrowserBase';
   return `
-    <div class="integration-card">
+    <div class="integration-card${isBrowser ? ' coming-soon-card' : ''}">
       <div class="integration-card-header">
         <div>
           <div class="integration-card-name">${platform.name}</div>
           <div class="integration-card-type">${platform.type} Integration</div>
         </div>
-        ${connected ? '<span class="badge badge-green">Connected</span>' : '<span class="badge" style="background:var(--bg-elevated);color:var(--text-muted);">Not connected</span>'}
+        ${isBrowser ? '<span class="badge badge-yellow">Coming Soon</span>' : connected ? '<span class="badge badge-green">Connected</span>' : '<span class="badge" style="background:var(--bg-elevated);color:var(--text-muted);">Not connected</span>'}
       </div>
       <div style="font-size:12px;color:var(--text-dim);">${platform.desc}</div>
+      ${isBrowser ? '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">BrowserBase scraping integration is planned for a future release.</div>' : ''}
       ${platform.fields.includes('apiKey') ? `
         <div class="form-group" style="margin-bottom:6px;">
           <label class="form-label">API Key</label>
@@ -1211,11 +1428,10 @@ function integrationCard(platform, existing) {
           <label class="form-label">Subdomain</label>
           <input class="input" data-cfg-sub="${platform.id}" value="${existing ? existing.subdomain || '' : ''}" placeholder="your-company">
         </div>` : ''}
-      ${platform.type === 'BrowserBase' ? '<div style="font-size:11px;color:var(--text-muted);">Requires BROWSERBASE_API_KEY environment variable</div>' : ''}
       <div style="display:flex;gap:6px;margin-top:4px;">
         ${platform.fields.length > 0 ? `<button class="btn btn-sm btn-primary" onclick="saveIntegration('${platform.id}')">Save</button>` : ''}
-        ${connected ? `<button class="btn btn-sm" onclick="testIntegration('${platform.id}')">Test</button>` : ''}
-        ${connected ? `<button class="btn btn-sm" onclick="syncIntegration('${platform.id}')">Sync</button>` : ''}
+        ${connected && !isBrowser ? `<button class="btn btn-sm" onclick="testIntegration('${platform.id}')">Test</button>` : ''}
+        ${connected && !isBrowser ? `<button class="btn btn-sm" onclick="syncIntegration('${platform.id}')">Sync</button>` : ''}
       </div>
       ${existing && existing.lastSync ? `<div style="font-size:11px;color:var(--text-muted);margin-top:6px;">Last sync: ${timeAgo(existing.lastSync)}</div>` : ''}
     </div>`;
@@ -1236,16 +1452,20 @@ window.saveIntegration = async function(platform) {
 
 window.testIntegration = async function(platform) {
   toast(`Testing ${platform}...`);
-  const result = await api(`/api/integrations/${platform}/test`, { method: 'POST' });
-  if (result.ok) toast(`${platform} connection successful!`);
-  else toast(`${platform} test failed: ${result.error}`, 'error');
+  try {
+    const result = await api(`/api/integrations/${platform}/test`, { method: 'POST' });
+    if (result.ok) toast(`${platform} connection successful!`);
+    else toast(`${platform} test failed: ${result.error}`, 'error');
+  } catch (e) { /* already toasted */ }
 };
 
 window.syncIntegration = async function(platform) {
   toast(`Syncing ${platform}...`);
-  const result = await api(`/api/integrations/${platform}/sync`, { method: 'POST' });
-  if (result.ok) { await loadAll(); renderIntegrations(); toast(`${platform} synced`); }
-  else toast(`Sync failed: ${result.error}`, 'error');
+  try {
+    const result = await api(`/api/integrations/${platform}/sync`, { method: 'POST' });
+    if (result.ok) { await loadAll(); renderIntegrations(); toast(`${platform} synced`); }
+    else toast(`Sync failed: ${result.error}`, 'error');
+  } catch (e) { /* already toasted */ }
 };
 
 // --- SCORING ---
@@ -1253,6 +1473,13 @@ function renderScoring() {
   const pc = document.getElementById('page-content');
   const w = state.scoring.weights || {};
   const labels = { skillsMatch: 'Skills Match', experience: 'Experience', education: 'Education', cultureFit: 'Culture Fit', communication: 'Communication' };
+  const descriptions = {
+    skillsMatch: 'Compares candidate resume keywords against the required skills for the role. Higher match ratio = higher score.',
+    experience: 'Checks for experience-level keywords (e.g. "senior", "5+ years") matching the role requirements.',
+    education: 'Looks for education-related keywords matching the role\'s education preference.',
+    cultureFit: 'Matches culture fit criteria keywords against candidate profile text.',
+    communication: 'Detects communication-related keywords like "teamwork", "leadership", "presentation" in candidate profile.'
+  };
   const unscored = state.candidates.filter(c => c.score === null || c.score === undefined).length;
 
   pc.innerHTML = `
@@ -1265,10 +1492,12 @@ function renderScoring() {
     <div class="section-pad">
       <div class="card" style="padding:20px;max-width:600px;">
         <h3 style="font-size:14px;font-weight:600;margin-bottom:16px;">Scoring Weights</h3>
-        <p style="font-size:12px;color:var(--text-dim);margin-bottom:16px;">Adjust the importance of each factor. Higher weight = more impact on final score.</p>
+        <p style="font-size:12px;color:var(--text-dim);margin-bottom:16px;">Adjust the importance of each factor. Higher weight = more impact on final score. Auto-scoring analyses candidate resume and notes text against role requirements.</p>
         ${Object.entries(w).map(([key, val]) => `
           <div class="weight-row">
-            <div class="weight-label">${labels[key] || key}</div>
+            <div class="weight-label" title="${esc(descriptions[key] || '')}">${labels[key] || key}
+              <div style="font-size:10px;color:var(--text-muted);font-weight:400;margin-top:2px;">${esc(descriptions[key] || '')}</div>
+            </div>
             <input type="range" class="weight-slider" min="1" max="10" value="${val}" data-weight="${key}">
             <div class="weight-value" id="swv-${key}">${val}</div>
           </div>`).join('')}
@@ -1386,7 +1615,11 @@ function renderSettings() {
         </div>
         <div class="form-group">
           <label class="form-label">Timezone</label>
-          <input class="input" id="set-tz" value="${esc(s.timezone || 'UTC')}">
+          <select class="select-styled" id="set-tz">
+            ${['UTC','US/Eastern','US/Central','US/Mountain','US/Pacific','Europe/London','Europe/Berlin','Europe/Paris','Asia/Tokyo','Asia/Shanghai','Asia/Kolkata','Australia/Sydney','America/Sao_Paulo','America/Chicago','America/New_York','America/Los_Angeles'].map(tz =>
+              `<option value="${tz}" ${(s.timezone || 'UTC') === tz ? 'selected' : ''}>${tz}</option>`
+            ).join('')}
+          </select>
         </div>
         <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
       </div>
@@ -1401,7 +1634,7 @@ function renderSettings() {
 window.saveSettings = async function() {
   await api('/api/settings', { method: 'POST', body: {
     companyName: document.getElementById('set-company').value.trim(),
-    timezone: document.getElementById('set-tz').value.trim()
+    timezone: document.getElementById('set-tz').value
   }});
   toast('Settings saved');
 };
@@ -1414,15 +1647,12 @@ window.resetOnboarding = async function() {
   render();
 };
 
-window.filterPipelineModal = function() {
-  toast('Use the role selector to filter the pipeline');
-};
-
 // ============================================================
 // INIT
 // ============================================================
 (async function init() {
   await loadAll();
   const page = location.hash.slice(1) || 'dashboard';
-  navigate(page);
+  // Map old 'projects' hash to 'roles'
+  navigate(page === 'projects' ? 'roles' : page);
 })();
